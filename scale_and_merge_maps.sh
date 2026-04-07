@@ -17,6 +17,7 @@ set -euo pipefail
 ### ARGUMENTS ###
 directory="."
 file_type="jpeg"
+output_dir=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,13 +29,21 @@ while [[ $# -gt 0 ]]; do
       file_type="$2"
       shift 2
       ;;
+    -o|--output-dir)
+      output_dir="$2"
+      shift 2
+      ;;
     *)
       echo "Unknown argument: $1" >&2
-      echo "Usage: $0 [-d|--directory DIR] [-t|--file-type TYPE]" >&2
+      echo "Usage: $0 [-d|--directory DIR] [-t|--file-type TYPE] [-o|--output-dir DIR]" >&2
       exit 1
       ;;
   esac
 done
+
+# Default output dir to source directory
+[[ -z "$output_dir" ]] && output_dir="$directory"
+mkdir -p "$output_dir"
 
 ### SETTINGS ###
 dpi=96          # raster resolution
@@ -152,7 +161,7 @@ for f in "${sources[@]}"; do
       -geometry "+${x_offset}+${y_offset}" \
       -composite "$canvas"
 
-    out_pdf="a3_${base##*/}.pdf"
+    out_pdf="${output_dir}/a3_${base##*/}.pdf"
     convert "$canvas" -units PixelsPerInch -density "$dpi" "$out_pdf"
     if [[ $rotate_a3 -eq 1 ]]; then
       echo "   OK ${out_pdf}  (A3 Portrait, ${a3_w_mm}x${a3_h_mm} mm, rotated 90 deg)"
@@ -204,7 +213,7 @@ page_used=0
 flush_page() {
   a0_page_num=$((a0_page_num + 1))
   local out_pdf
-  out_pdf=$(printf "a0_page_%03d.pdf" "$a0_page_num")
+  out_pdf=$(printf "${output_dir}/a0_page_%03d.pdf" "$a0_page_num")
   local canvas="$tmpdir/page_${a0_page_num}_canvas.png"
 
   echo ""
@@ -284,7 +293,7 @@ if [[ $a0_page_num -gt 0 ]]; then
   echo ""
   echo "  A0 PDFs (${a0_page_num}):"
   for p in $(seq -f "%03g" 1 "$a0_page_num"); do
-    f="a0_page_${p}.pdf"
+    f="${output_dir}/a0_page_${p}.pdf"
     [[ -f "$f" ]] && echo "   → $f"
   done
   echo "  Canvas : A0 Portrait  ${a0_w_mm} × ${a0_h_mm} mm  @ ${dpi} DPI"
