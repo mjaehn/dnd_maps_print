@@ -16,25 +16,24 @@ Scale D&D maps to A0 or A3 format for printing.
 | Option | Default | Description |
 |---|---|---|
 | `-d`, `--directory DIR` | `.` | Directory containing the source images |
-| `-t`, `--file-type TYPE` | `jpeg` | Image file extension to look for (e.g. `png`, `jpg`, `webp`) |
 | `-o`, `--output-dir DIR` | same as `--directory` | Directory where output PDFs are written |
 
 ### Examples
 
 ```bash
-# Process JPEGs in the current directory, output PDFs alongside them
+# Process images in the current directory, output PDFs alongside them
 ./scale_and_merge_maps.sh
 
-# Process PNGs in a specific folder
-./scale_and_merge_maps.sh -d ~/maps -t png
+# Process images in a specific folder
+./scale_and_merge_maps.sh -d ~/maps
 
 # Write PDFs to a separate output folder
-./scale_and_merge_maps.sh -d ~/maps -t png -o ~/maps/pdf
+./scale_and_merge_maps.sh -d ~/maps -o ~/maps/pdf
 ```
 
 ## File naming convention
 
-Source images must include a `WxH` pattern in their filename (width × height in inches), e.g.:
+Source images must include a `WxH` pattern in their filename (width × height in inches). Any image format supported by ImageMagick is accepted, e.g.:
 
 ```
 dungeon_30x22.jpeg

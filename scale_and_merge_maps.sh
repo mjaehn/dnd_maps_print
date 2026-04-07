@@ -16,7 +16,6 @@ set -euo pipefail
 
 ### ARGUMENTS ###
 directory="."
-file_type="jpeg"
 output_dir=""
 
 while [[ $# -gt 0 ]]; do
@@ -25,17 +24,13 @@ while [[ $# -gt 0 ]]; do
       directory="$2"
       shift 2
       ;;
-    -t|--file-type)
-      file_type="$2"
-      shift 2
-      ;;
     -o|--output-dir)
       output_dir="$2"
       shift 2
       ;;
     *)
       echo "Unknown argument: $1" >&2
-      echo "Usage: $0 [-d|--directory DIR] [-t|--file-type TYPE] [-o|--output-dir DIR]" >&2
+      echo "Usage: $0 [-d|--directory DIR] [-o|--output-dir DIR]" >&2
       exit 1
       ;;
   esac
@@ -87,7 +82,7 @@ mkdir -p "$tmpdir"
 sources=()
 while IFS= read -r -d '' file; do
   sources+=("$file")
-done < <(find "$directory" -maxdepth 1 -type f -iname "*[0-9]x[0-9]*.${file_type}" -print0 | sort -z -V)
+done < <(find "$directory" -maxdepth 1 -type f -iname "*[0-9]x[0-9]*" -not -iname "*.pdf" -print0 | sort -z -V)
 
 if [[ ${#sources[@]} -eq 0 ]]; then
   echo "No source images with WxH pattern found. Aborting."
@@ -105,7 +100,7 @@ a0_page_num=0
 
 for f in "${sources[@]}"; do
   f="${f#./}"
-  base="${f%.${file_type}}"
+  base="${f%.*}"
 
   dims=$(echo "$base" | grep -Eo '[0-9]+x[0-9]+' | tail -n1 || true)
   if [[ -z "$dims" ]]; then
