@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Scale PNGs using inch dimensions from filenames.
+# Scale images using inch dimensions from filenames.
 # - If a single map fits on A3 Portrait (297 × 420 mm), output it as its own A3 PDF.
 # - Otherwise pack maps onto A0 Portrait pages (841 × 1189 mm), one PDF per page.
 #
@@ -13,6 +13,28 @@
 #   a0_page_001.pdf, ...      — remaining maps packed onto A0 pages
 
 set -euo pipefail
+
+### ARGUMENTS ###
+directory="."
+file_type="jpeg"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -d|--directory)
+      directory="$2"
+      shift 2
+      ;;
+    -t|--file-type)
+      file_type="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      echo "Usage: $0 [-d|--directory DIR] [-t|--file-type TYPE]" >&2
+      exit 1
+      ;;
+  esac
+done
 
 ### SETTINGS ###
 dpi=96          # raster resolution
@@ -51,15 +73,15 @@ tmpdir="scaled_tmp"
 rm -rf "$tmpdir"
 mkdir -p "$tmpdir"
 
-# ── 1. Collect & scale source PNGs ──────────────────────────────────────────
+# ── 1. Collect & scale source images ───────────────────────────────────────
 
 sources=()
 while IFS= read -r -d '' file; do
   sources+=("$file")
-done < <(find . -maxdepth 1 -type f -iname '*[0-9]x[0-9]*.png' -print0 | sort -z -V)
+done < <(find "$directory" -maxdepth 1 -type f -iname "*[0-9]x[0-9]*.${file_type}" -print0 | sort -z -V)
 
 if [[ ${#sources[@]} -eq 0 ]]; then
-  echo "No source PNGs with WxH pattern found. Aborting."
+  echo "No source images with WxH pattern found. Aborting."
   exit 1
 fi
 
@@ -74,7 +96,7 @@ a0_page_num=0
 
 for f in "${sources[@]}"; do
   f="${f#./}"
-  base="${f%.png}"
+  base="${f%.${file_type}}"
 
   dims=$(echo "$base" | grep -Eo '[0-9]+x[0-9]+' | tail -n1 || true)
   if [[ -z "$dims" ]]; then
