@@ -8,6 +8,13 @@
 #   - Maps are centred horizontally; if a map exceeds A0 width it is scaled down
 #   - When the next map would overflow the current page, a new A0 page is started
 #
+# Fit-check (A0):
+#   After collecting all A0 maps the script reports how much downscaling would
+#   be needed to fit them all onto a single A0 page.
+#   --max-downscale PCT  If the required downscale is within PCT %, apply it
+#                        automatically so all maps land on one page.
+#   Example: --max-downscale 10  (allow up to 10 % size reduction)
+#
 # Output:
 #   a3_<mapname>.pdf          -- maps that fit on A3 (one PDF each)
 #   a0_page_001.pdf, ...      -- remaining maps packed onto A0 pages
@@ -18,14 +25,16 @@ set -euo pipefail
 
 directory="."
 output_dir=""
+max_downscale=0   # max allowable downscale % to fit all A0 maps on one page (0 = report only)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -d|--directory)  directory="$2";   shift 2 ;;
-    -o|--output-dir) output_dir="$2";  shift 2 ;;
+    -d|--directory)   directory="$2";     shift 2 ;;
+    -o|--output-dir)  output_dir="$2";    shift 2 ;;
+    --max-downscale)  max_downscale="$2"; shift 2 ;;
     *)
       echo "Unknown argument: $1" >&2
-      echo "Usage: $0 [-d|--directory DIR] [-o|--output-dir DIR]" >&2
+      echo "Usage: $0 [-d|--directory DIR] [-o|--output-dir DIR] [--max-downscale PCT]" >&2
       exit 1
       ;;
   esac
@@ -62,6 +71,7 @@ echo "   Max map size   : ${a3_max_w_in}\" x ${a3_max_h_in}\"  (= ${a3_w_mm} x $
 echo "A0 Portrait canvas: ${a0_w_px} x ${a0_h_px} px  (${a0_w_mm} x ${a0_h_mm} mm @ ${dpi} DPI)"
 echo "   Max map size   : ${a0_max_w_in}\" x ${a0_max_h_in}\"  (= ${a0_w_mm} x ${a0_h_mm} mm)"
 echo "Gap between maps  : ${gap_in}\" = ${gap_px} px"
+echo "Max downscale     : ${max_downscale}%  (0 = report only, no auto-scaling)"
 echo "Source directory  : $(realpath "$directory")"
 echo "Output directory  : $(realpath "$output_dir")"
 echo ""
@@ -152,7 +162,7 @@ for f in "${sources[@]}"; do
     convert "$canvas" "$scaled_png" -geometry "+${x_off}+${y_off}" -composite "$canvas"
 
     out_pdf="${output_dir}/a3_${base}.pdf"
-    convert "$canvas" -units PixelsPerInch -density "$dpi" "$out_pdf"
+    png_to_pdf "$canvas" "$out_pdf"
 
     rot_note=$([[ $rotate -eq 1 ]] && echo " [rotated 90 deg]" || echo "")
     echo "   -> ${out_pdf}  (A3 ${a3_w_mm}x${a3_h_mm} mm${rot_note})"
@@ -192,6 +202,72 @@ for f in "${sources[@]}"; do
   fi
 done
 
+# ── 2.5 Fit-check: downscale table for consecutive groups ────────────────────
+#
+# For every consecutive group of 2 or more A0 maps reports how much downscaling
+# would be needed to place that group on a single A0 page.
+# The gap between maps is kept fixed (not scaled).
+# If --max-downscale PCT is given, groups within budget are flagged; the actual
+# per-page downscaling is applied automatically during packing (section 3).
+
+if [[ ${#scaled_list[@]} -gt 1 ]]; then
+  echo ""
+  echo "Fit check — downscale needed to place consecutive maps on one A0 page:"
+  echo "  (gap of ${gap_in}\" between maps is kept constant)"
+  echo ""
+
+  fc_n=${#scaled_list[@]}
+  fc_any_hint=0
+
+  for fc_s in $(seq 0 $(( fc_n - 1 ))); do
+    for fc_e in $(seq $(( fc_s + 1 )) $(( fc_n - 1 ))); do
+      fc_group_h=0
+      for fc_i in $(seq $fc_s $fc_e); do
+        fc_group_h=$(( fc_group_h + scaled_h[fc_i] ))
+      done
+      fc_cnt=$(( fc_e - fc_s + 1 ))
+      fc_gaps=$(( (fc_cnt - 1) * gap_px ))
+      fc_avail=$(( a0_h_px - fc_gaps ))
+
+      # Build short name list from filenames (strip a0_NNN_ prefix and .png)
+      fc_names=""
+      for fc_i in $(seq $fc_s $fc_e); do
+        fc_bn=$(basename "${scaled_list[$fc_i]}")
+        fc_nm="${fc_bn#a0_[0-9][0-9][0-9]_}"; fc_nm="${fc_nm%.png}"
+        fc_names="${fc_names:+${fc_names}, }${fc_nm}"
+      done
+
+      if [[ $(( fc_group_h + fc_gaps )) -le $a0_h_px ]]; then
+        printf "  maps %d-%d  (%s): already fit — no downscale needed\n" \
+          $(( fc_s + 1 )) $(( fc_e + 1 )) "$fc_names"
+      elif [[ $fc_avail -le 0 ]]; then
+        printf "  maps %d-%d  (%s): fixed gaps alone exceed A0 height\n" \
+          $(( fc_s + 1 )) $(( fc_e + 1 )) "$fc_names"
+      else
+        fc_pct=$(awk -v h="$fc_group_h" -v av="$fc_avail" \
+          'BEGIN{printf "%.1f", (1 - av/h) * 100}')
+        fc_hint=""
+        if awk -v p="$fc_pct" -v md="$max_downscale" \
+             'BEGIN{exit (md+0 > 0 && p+0 <= md+0) ? 0 : 1}' 2>/dev/null; then
+          fc_hint="  [within --max-downscale ${max_downscale}% budget → will be merged]"
+          fc_any_hint=1
+        fi
+        printf "  maps %d-%d  (%s): need %s%% downscale%s\n" \
+          $(( fc_s + 1 )) $(( fc_e + 1 )) "$fc_names" "$fc_pct" "$fc_hint"
+      fi
+    done
+  done
+
+  echo ""
+  if [[ $fc_any_hint -eq 1 ]]; then
+    echo "  Groups marked above will be downscaled and merged onto one A0 page during packing."
+  elif awk -v md="$max_downscale" 'BEGIN{exit (md+0 > 0) ? 0 : 1}' 2>/dev/null; then
+    echo "  No consecutive group fits within --max-downscale ${max_downscale}%; all maps packed at original size."
+  else
+    echo "  Use --max-downscale <PCT> to automatically merge and downscale groups onto one A0 page."
+  fi
+fi
+
 # ── 3. Pack A0 maps ───────────────────────────────────────────────────────────
 
 # Declared before flush_page to ensure they are in scope as globals
@@ -199,6 +275,59 @@ page_imgs=()
 page_w=()
 page_h=()
 page_used=0
+
+# Converts a canvas PNG to a PDF, embedding the configured DPI.
+# Uses img2pdf (avoids ImageMagick's PDF security-policy restriction).
+png_to_pdf() {
+  local src="$1" dst="$2"
+  local tmp="${src%.png}_pdftmp.png"
+  convert "$src" -units PixelsPerInch -density "$dpi" "$tmp"
+  python3 -m img2pdf "$tmp" -o "$dst"
+  rm -f "$tmp"
+}
+
+# Rescales all images on the current page by the minimum factor needed to fit
+# within A0 height, if max_downscale > 0 and the needed % is within budget.
+# Updates page_imgs, page_w, page_h, page_used in-place.
+apply_page_downscale() {
+  [[ $max_downscale -eq 0 ]] && return 0
+  [[ ${#page_imgs[@]} -eq 0 ]] && return 0
+
+  local _maps_h=0
+  local _ph
+  for _ph in "${page_h[@]}"; do _maps_h=$(( _maps_h + _ph )); done
+  local _n=${#page_imgs[@]}
+  local _gaps=$(( (_n > 1 ? _n - 1 : 0) * gap_px ))
+  local _total=$(( _maps_h + _gaps ))
+  [[ $_total -le $a0_h_px ]] && return 0
+
+  local _avail=$(( a0_h_px - _gaps ))
+  [[ $_avail -le 0 ]] && return 0
+
+  local _pct
+  _pct=$(awk -v h="$_maps_h" -v av="$_avail" 'BEGIN{printf "%.1f", (1-av/h)*100}')
+  awk -v p="$_pct" -v md="$max_downscale" 'BEGIN{exit (p+0 <= md+0) ? 0 : 1}' || return 0
+
+  local _sf
+  _sf=$(awk -v p="$_pct" 'BEGIN{printf "%.6f", 1-p/100}')
+  echo "   [page downscale ${_pct}%] rescaling ${_n} map(s) to fit on one A0 page"
+
+  local _new_used=0
+  local _i
+  for _i in "${!page_imgs[@]}"; do
+    local _nw _nh
+    _nw=$(awk -v v="${page_w[$_i]}" -v s="$_sf" 'BEGIN{printf "%d", v*s+0.5}')
+    _nh=$(awk -v v="${page_h[$_i]}" -v s="$_sf" 'BEGIN{printf "%d", v*s+0.5}')
+    local _nimg="${page_imgs[$_i]%.png}_pgds.png"
+    convert "${page_imgs[$_i]}" -resize "${_nw}x${_nh}!" "$_nimg"
+    page_imgs[$_i]="$_nimg"
+    page_w[$_i]=$_nw
+    page_h[$_i]=$_nh
+    local _lg=$(( _i > 0 ? gap_px : 0 ))
+    _new_used=$(( _new_used + _lg + _nh ))
+  done
+  page_used=$_new_used
+}
 
 flush_page() {
   a0_page_num=$((a0_page_num + 1))
@@ -224,7 +353,7 @@ flush_page() {
     y_off=$((y_off + ih + gap_px))
   done
 
-  convert "$canvas" -units PixelsPerInch -density "$dpi" "$out_pdf"
+  png_to_pdf "$canvas" "$out_pdf"
   echo "   -> ${out_pdf}  (A0 ${a0_w_mm}x${a0_h_mm} mm)"
 }
 
@@ -246,6 +375,7 @@ if [[ ${#scaled_list[@]} -gt 0 ]]; then
     if [[ $(( page_used + needed )) -gt $a0_h_px \
        && $iw -lt $ih \
        && $ih -le $a0_w_px \
+       && $(( a0_h_px - page_used - local_gap )) -gt 0 \
        && $(( local_gap + iw )) -le $(( a0_h_px - page_used )) ]]; then
       rotated_tmp="$tmpdir/rot_${idx}_$(basename "$img")"
       echo "   [rotate 90] rotating $(basename "$img") to fit remaining $(( a0_h_px - page_used - local_gap ))px on current page"
@@ -256,8 +386,26 @@ if [[ ${#scaled_list[@]} -gt 0 ]]; then
       needed=$(( local_gap + ih ))
     fi
 
-    # If still doesn't fit (even after rotation), flush and start new page
-    if [[ ${#page_imgs[@]} -gt 0 && $(( page_used + needed )) -gt $a0_h_px ]]; then
+    # Check whether adding this map to the current page stays within the downscale budget.
+    # If so, accumulate rather than flushing (apply_page_downscale will handle it at flush time).
+    _within_ds_budget=0
+    if [[ $max_downscale -gt 0 && ${#page_imgs[@]} -gt 0 \
+       && $(( page_used + needed )) -gt $a0_h_px ]]; then
+      _tent_maps_h=0
+      for _th in "${page_h[@]}"; do _tent_maps_h=$(( _tent_maps_h + _th )); done
+      _tent_maps_h=$(( _tent_maps_h + ih ))
+      _tent_gaps=$(( ${#page_imgs[@]} * gap_px ))   # n existing maps → n gaps after adding 1
+      _tent_avail=$(( a0_h_px - _tent_gaps ))
+      if [[ $_tent_avail -gt 0 ]]; then
+        _within_ds_budget=$(awk -v h="$_tent_maps_h" -v av="$_tent_avail" -v md="$max_downscale" \
+          'BEGIN{pct=(1-av/h)*100; print (pct <= md+0) ? 1 : 0}')
+      fi
+    fi
+
+    # If still doesn't fit (even after rotation) and not within downscale budget, flush and start new page
+    if [[ ${#page_imgs[@]} -gt 0 && $(( page_used + needed )) -gt $a0_h_px \
+       && $_within_ds_budget -eq 0 ]]; then
+      apply_page_downscale
       flush_page
       page_imgs=(); page_w=(); page_h=()
       page_used=0; local_gap=0; needed=$ih
@@ -269,7 +417,10 @@ if [[ ${#scaled_list[@]} -gt 0 ]]; then
     page_used=$(( page_used + local_gap + ih ))
   done
 
-  [[ ${#page_imgs[@]} -gt 0 ]] && flush_page
+  if [[ ${#page_imgs[@]} -gt 0 ]]; then
+    apply_page_downscale
+    flush_page
+  fi
 fi
 
 # ── 4. Summary ────────────────────────────────────────────────────────────────
